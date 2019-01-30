@@ -3,7 +3,6 @@ const express = require('express');
 const path = require('path');
 const packageJson = require('package-json');
 const csrf = require('csurf');
-const Authentication = require('./Authentication.js');
 var fs = require('fs');
 
 const currentVersionFeatures = require('../package.json').parseDashboardFeatures;
@@ -62,6 +61,17 @@ module.exports = function(config, options) {
     const mountPath = getMount(app.mountpath);
     const users = config.users;
     const useEncryptedPasswords = config.useEncryptedPasswords ? true : false;
+    let Authentication;
+    if (config.customAuthInstance) {
+      if (typeof config.customAuthInstance === 'function' &&
+          config.customAuthInstance.prototype.initialize) {
+        Authentication = config.customAuthInstance;
+      } else {
+        throw new Error('The customAuthInstance parameter must be a JS object constructor with an initialize() method.');
+      }
+    } else {
+      Authentication = require('./Authentication.js');
+    }
     const authInstance = new Authentication(users, useEncryptedPasswords, mountPath);
     authInstance.initialize(app, { cookieSessionSecret: options.cookieSessionSecret });
 
@@ -88,7 +98,7 @@ module.exports = function(config, options) {
         req.connection.remoteAddress === '127.0.0.1' ||
         req.connection.remoteAddress === '::ffff:127.0.0.1' ||
         req.connection.remoteAddress === '::1';
-      if (!options.dev && !requestIsLocal) {
+      if (!options.dev && !requestIsLocal && !config.customAuthInstance) {
         if (!req.secure && !options.allowInsecureHTTP) {
           //Disallow HTTP requests except on localhost, to prevent the master key from being transmitted in cleartext
           return res.send({ success: false, error: 'Parse Dashboard can only be remotely accessed via HTTPS' });
@@ -133,7 +143,7 @@ module.exports = function(config, options) {
         return res.json(response);
       }
 
-      if (users) {
+      if (users || config.customAuthInstance) {
         //They provided incorrect auth
         return res.sendStatus(401);
       }
@@ -168,7 +178,7 @@ module.exports = function(config, options) {
     }
 
     app.get('/login', csrf(), function(req, res) {
-      if (!users || (req.user && req.user.isAuthenticated)) {
+      if (!(users || config.customAuthInstance) || (req.user && req.user.isAuthenticated)) {
         return res.redirect(`${mountPath}apps`);
       }
 
@@ -200,10 +210,10 @@ module.exports = function(config, options) {
 
     // For every other request, go to index.html. Let client-side handle the rest.
     app.get('/*', function(req, res) {
-      if (users && (!req.user || !req.user.isAuthenticated)) {
+      if ((users || config.customAuthInstance) && (!req.user || !req.user.isAuthenticated)) {
         return res.redirect(`${mountPath}login`);
       }
-      if (users && req.user && req.user.matchingUsername ) {
+      if ((users || config.customAuthInstance) && req.user && req.user.matchingUsername ) {
         res.append('username', req.user.matchingUsername);
       }
       res.send(`<!DOCTYPE html>
